@@ -1,0 +1,46 @@
+backend/api.go | 27 ++++++++++++++++++---------
+ 1 file changed, 18 insertions(+), 9 deletions(-)
+
+--- Changes ---
+
+backend/api.go
+  @@ -20,15 +20,16 @@ import (
+  -	androidAPIVersion int64
+  -	model             string
+  -	make              string
+  -	clientVersionCode int64
+  -	userAgent         string
+  -	language          string
+  -	authData          string
+  -	client            *http.Client
+  -	authResponseCache map[string]string
+  +	androidAPIVersion  int64
+  +	model              string
+  +	make               string
+  +	clientVersionCode  int64
+  +	userAgent          string
+  +	language           string
+  +	authData           string
+  +	client             *http.Client
+  +	authResponseCache  map[string]string
+  +	bearerTokenOverride string
+   }
+   
+   type AuthResponse struct {
+  @@ -84,10 +85,18 @@ func NewApi() (*Api, error) {
+  +	if token := os.Getenv("GOTOHP_BEARER_TOKEN"); token != "" {
+  +		api.bearerTokenOverride = strings.TrimSpace(token)
+  +	}
+  +
+   	return api, nil
+   }
+   
+   func (a *Api) BearerToken() (string, error) {
+  +	if a.bearerTokenOverride != "" {
+  +		return a.bearerTokenOverride, nil
+  +	}
+  +
+   	expiryStr := a.authResponseCache["Expiry"]
+   	expiry, err := strconv.ParseInt(expiryStr, 10, 64)
+   	if err != nil {
+  +18 -9
