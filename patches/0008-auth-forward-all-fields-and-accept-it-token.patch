@@ -1,0 +1,71 @@
+From 3de3719ea7a5860a9b9e010fc93418963608b13e Mon Sep 17 00:00:00 2001
+From: gotohp-patch <patch@gotohp.local>
+Date: Mon, 4 May 2026 21:16:19 +0900
+Subject: [PATCH] auth: forward all credential fields + accept it= token format
+
+- Replace hardcoded 12-field auth request body with iteration over all
+  credential fields, so assertion_jwt (token binding) is forwarded.
+- Accept it= as auth token when Auth= is absent (Google's new encrypted
+  token format for accounts enrolled in token binding rollout).
+
+Fixes Google returning 403 BadAuthentication for accounts with
+assertion_jwt, and auth response does not contain bearer token
+for accounts receiving it=/TokenEncrypted=1 responses.
+---
+ backend/api.go | 31 ++++++++++++++-----------------
+ 1 file changed, 14 insertions(+), 17 deletions(-)
+
+diff --git a/backend/api.go b/backend/api.go
+index dad82cd..34ab9b6 100644
+--- a/backend/api.go
++++ b/backend/api.go
+@@ -115,21 +115,13 @@ func (a *Api) getAuthToken() (map[string]string, error) {
+ 		return nil, fmt.Errorf("failed to parse auth data: %w", err)
+ 	}
+ 
+-	authRequestData := url.Values{
+-		"androidId":                    {authDataValues.Get("androidId")},
+-		"app":                          {"com.google.android.apps.photos"},
+-		"client_sig":                   {authDataValues.Get("client_sig")},
+-		"callerPkg":                    {"com.google.android.apps.photos"},
+-		"callerSig":                    {authDataValues.Get("callerSig")},
+-		"device_country":               {authDataValues.Get("device_country")},
+-		"Email":                        {authDataValues.Get("Email")},
+-		"google_play_services_version": {authDataValues.Get("google_play_services_version")},
+-		"lang":                         {authDataValues.Get("lang")},
+-		"oauth2_foreground":            {authDataValues.Get("oauth2_foreground")},
+-		"sdk_version":                  {authDataValues.Get("sdk_version")},
+-		"service":                      {authDataValues.Get("service")},
+-		"Token":                        {authDataValues.Get("Token")},
++	authRequestData := url.Values{}
++	for k, v := range authDataValues {
++		authRequestData[k] = v
+ 	}
++	authRequestData.Set("app", "com.google.android.apps.photos")
++	authRequestData.Set("callerPkg", "com.google.android.apps.photos")
++	authRequestData.Del("has_permission")
+ 
+ 	headers := map[string]string{
+ 		"Accept-Encoding": "gzip",
+@@ -192,10 +184,15 @@ func (a *Api) getAuthToken() (map[string]string, error) {
+ 		}
+ 	}
+ 
+-	// Validate we got the required fields
+-	if parsedAuthResponse["Auth"] == "" {
+-		return nil, errors.New("auth response missing Auth token")
++	// Accept both legacy Auth= and new it= (encrypted) token formats
++	token := parsedAuthResponse["Auth"]
++	if token == "" {
++		token = parsedAuthResponse["it"]
+ 	}
++	if token == "" {
++		return nil, errors.New("auth response missing Auth or it token")
++	}
++	parsedAuthResponse["Auth"] = token
+ 	if parsedAuthResponse["Expiry"] == "" {
+ 		return nil, errors.New("auth response missing Expiry")
+ 	}
+-- 
+2.53.0
+

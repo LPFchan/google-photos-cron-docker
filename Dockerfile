@@ -20,6 +20,8 @@
 #   0004 – cli.go:                 supply os.Pipe() to Bubble Tea for epoll safety
 #   0005 – progress_writer.go:     write real-time progress JSON for web UI
 #   0006 – webui_server.go:         "serve" subcommand: embedded Go HTTP server
+#   0007 – cli.go:                 add --exclude flag for recursive directory walks
+#   0008 – backend/api.go:         forward all auth fields + accept it= token format
 FROM golang:1.26-alpine AS builder
 
 ARG GOTOHP_VERSION=v0.7.0
