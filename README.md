@@ -162,7 +162,8 @@ the indexed form.  Both styles may be combined.
 | `GOTOHP_DELETE`             | `FALSE` | Delete source file after successful upload |
 | `GOTOHP_DISABLE_FILTER`     | `FALSE` | Upload all file types, not just media |
 | `GOTOHP_DATE_FROM_FILENAME` | `FALSE` | Parse media date from filename (e.g. `20240709_182027.jpg`) |
-| `GOTOHP_EXCLUDE`            | `""`    | Skip directories whose name matches this pattern during recursive walk (e.g. `@eaDir`) |
+| `GOTOHP_EXCLUDE`            | `""`    | Skip directories whose name or source-relative path matches this comma-separated list during recursive walk (e.g. `@eaDir,Cache`) |
+| `GOTOHP_INCLUDE`            | `""`    | Only upload files under directories whose name or source-relative path matches this comma-separated list during recursive walk (e.g. `Camera,Exports`) |
 | `GOTOHP_SKIP_UNCHANGED`     | `FALSE` | Skip calling gotohp for a source tree when its metadata fingerprint matches the previous successful run |
 | `GOTOHP_SKIP_UNCHANGED_STATE_DIR` | `/config/gotohp-wrapper/skip-unchanged/v1` | Persistent state directory for skip-unchanged fingerprints |
 | `GOTOHP_LOG_LEVEL`          | `info`  | Log verbosity: `debug`, `info`, `warn`, `error` |
@@ -183,6 +184,7 @@ global value is used as the default.
 | `GOTOHP_DISABLE_FILTER_N`     | Override disable-filter flag for pair N |
 | `GOTOHP_DATE_FROM_FILENAME_N` | Override date-from-filename flag for pair N |
 | `GOTOHP_EXCLUDE_N`            | Override exclude pattern for pair N |
+| `GOTOHP_INCLUDE_N`            | Override include whitelist for pair N |
 | `GOTOHP_SKIP_UNCHANGED_N`     | Override skip-unchanged optimization for pair N |
 | `GOTOHP_LOG_LEVEL_N`          | Override log level for pair N |
 
@@ -215,6 +217,7 @@ content hashing every run would defeat most of the optimization.
 `GOTOHP_EXCLUDE` and `GOTOHP_EXCLUDE_N` are respected during fingerprinting, so
 changes inside excluded directories do not trigger an upload. `GOTOHP_RECURSIVE`
 is also respected: non-recursive pairs only fingerprint the source root level.
+`GOTOHP_INCLUDE` and `GOTOHP_INCLUDE_N` are also respected when present.
 
 If effective `GOTOHP_FORCE=TRUE`, skip-unchanged will not skip that pair because
 force mode explicitly requests gotohp to run again.

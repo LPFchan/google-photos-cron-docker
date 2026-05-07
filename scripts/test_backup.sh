@@ -41,6 +41,7 @@ HANG_TEST_TIMEOUT=10
 #   $12 skip-unchanged pair 0 override (optional; default: "")
 #   $13 skip-unchanged pair 1 override (optional; default: "")
 #   $14 GOTOHP_PROGRESS_LOG_INTERVAL value (optional; default: "60")
+#   $15 global GOTOHP_INCLUDE value (optional; default: "")
 ########################################
 setup_env() {
     local test_name="$1"
@@ -59,6 +60,7 @@ setup_env() {
     local pair0_skip_unchanged="${12:-}"
     local pair1_skip_unchanged="${13:-}"
     local progress_log_interval="${14:-60}"
+    local gotohp_include="${15:-}"
     mkdir -p "${env_dir}/bin" "${env_dir}/app"
 
     GOTOHP_CALLS="${env_dir}/gotohp_calls.txt"
@@ -96,6 +98,7 @@ function init_env() {
     GOTOHP_DISABLE_FILTER_LIST=("" "")
     GOTOHP_DATE_FROM_FILENAME_LIST=("" "")
     GOTOHP_EXCLUDE_LIST=("" "")
+    GOTOHP_INCLUDE_LIST=("" "")
     GOTOHP_SKIP_UNCHANGED_LIST=("${pair0_skip_unchanged}" "${pair1_skip_unchanged}")
     GOTOHP_LOG_LEVEL_LIST=("" "")
     GOTOHP_CREDS_LIST=("" "")
@@ -108,6 +111,7 @@ function init_env() {
     GOTOHP_DISABLE_FILTER="FALSE"
     GOTOHP_DATE_FROM_FILENAME="FALSE"
     GOTOHP_EXCLUDE="${gotohp_exclude}"
+    GOTOHP_INCLUDE="${gotohp_include}"
     GOTOHP_SKIP_UNCHANGED="${skip_unchanged}"
     GOTOHP_SKIP_UNCHANGED_STATE_DIR="${skip_unchanged_state_dir}"
     GOTOHP_LOG_LEVEL="info"
@@ -601,6 +605,7 @@ function init_env() {
     GOTOHP_DISABLE_FILTER_LIST=("" "" "")
     GOTOHP_DATE_FROM_FILENAME_LIST=("" "" "")
     GOTOHP_EXCLUDE_LIST=("" "" "")
+    GOTOHP_INCLUDE_LIST=("" "" "")
     GOTOHP_SKIP_UNCHANGED_LIST=("" "" "")
     GOTOHP_LOG_LEVEL_LIST=("" "" "")
     GOTOHP_CREDS_LIST=("" "" "")
@@ -613,6 +618,7 @@ function init_env() {
     GOTOHP_DISABLE_FILTER="FALSE"
     GOTOHP_DATE_FROM_FILENAME="FALSE"
     GOTOHP_EXCLUDE=""
+    GOTOHP_INCLUDE=""
     GOTOHP_SKIP_UNCHANGED="FALSE"
     GOTOHP_SKIP_UNCHANGED_STATE_DIR="${env_dir}/config/skip-unchanged"
     GOTOHP_LOG_LEVEL="info"
@@ -1112,6 +1118,58 @@ elif grep -q "Upload progress\|Upload final" "${SCRATCH}/t36_out.txt" 2>/dev/nul
     cat "${SCRATCH}/t36_out.txt"
 else
     pass "Test 36: progress summaries disabled with interval 0"
+fi
+
+########################################
+# Tests 37–38: multi-exclude and include filters in wrapper pre-flight checks
+########################################
+echo "--- Tests 37–38: include/exclude filter pre-flight checks ---"
+
+# Test 37: comma-separated excludes skip all matching directories before gotohp.
+EXCLUDED37="${SCRATCH}/t37_excluded"
+FILES37="${SCRATCH}/t37_files"
+mkdir -p "${EXCLUDED37}/@eaDir" "${EXCLUDED37}/Exports" "${FILES37}"
+echo "photo" > "${EXCLUDED37}/@eaDir/photo.jpg"
+echo "photo" > "${EXCLUDED37}/Exports/photo.jpg"
+echo "photo" > "${FILES37}/photo.jpg"
+
+setup_env "t37" "${EXCLUDED37}" "${FILES37}" "TRUE" "" "" "" "QUEUE" "@eaDir,Exports"
+RC=0
+PATH="${TEST_PATH}" bash "${TEST_BACKUP}" > "${SCRATCH}/t37_out.txt" 2>&1 || RC=$?
+if [[ $RC -ne 0 ]]; then
+    fail "Test 37: backup.sh exited with code ${RC}"
+    cat "${SCRATCH}/t37_out.txt"
+elif grep -q "upload ${EXCLUDED37}" "${GOTOHP_CALLS}" 2>/dev/null; then
+    fail "Test 37: source containing only comma-excluded directories was uploaded"
+    cat "${SCRATCH}/t37_out.txt"
+elif ! grep -q "upload ${FILES37}" "${GOTOHP_CALLS}" 2>/dev/null; then
+    fail "Test 37: valid comparison source was not uploaded"
+    cat "${SCRATCH}/t37_out.txt"
+else
+    pass "Test 37: comma-separated excludes honored by pre-flight check"
+fi
+
+# Test 38: include whitelist limits pre-flight to matching directories only.
+INCLUDE38="${SCRATCH}/t38_include"
+EMPTY38="${SCRATCH}/t38_empty"
+mkdir -p "${INCLUDE38}/Exports" "${INCLUDE38}/Ignored" "${EMPTY38}"
+echo "photo" > "${INCLUDE38}/Exports/photo.jpg"
+echo "photo" > "${INCLUDE38}/Ignored/photo.jpg"
+
+setup_env "t38" "${EMPTY38}" "${INCLUDE38}" "TRUE" "" "" "" "QUEUE" "" "FALSE" "" "" "" "60" "Exports"
+RC=0
+PATH="${TEST_PATH}" bash "${TEST_BACKUP}" > "${SCRATCH}/t38_out.txt" 2>&1 || RC=$?
+if [[ $RC -ne 0 ]]; then
+    fail "Test 38: backup.sh exited with code ${RC}"
+    cat "${SCRATCH}/t38_out.txt"
+elif ! grep -q -- "--include Exports" "${GOTOHP_CALLS}" 2>/dev/null; then
+    fail "Test 38: gotohp upload did not receive --include Exports"
+    cat "${SCRATCH}/t38_out.txt"
+elif ! grep -q "upload ${INCLUDE38}" "${GOTOHP_CALLS}" 2>/dev/null; then
+    fail "Test 38: included source was not uploaded"
+    cat "${SCRATCH}/t38_out.txt"
+else
+    pass "Test 38: include whitelist honored and forwarded to gotohp"
 fi
 
 ########################################

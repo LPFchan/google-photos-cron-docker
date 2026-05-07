@@ -1,0 +1,256 @@
+From 7d11142ea563d5c9b6d626a7f0437e1f2d2894e4 Mon Sep 17 00:00:00 2001
+From: Dockerfile <build@dockerfile>
+Date: Thu, 7 May 2026 17:54:09 +0900
+Subject: [PATCH] feat(cli): add include filter and multi-exclude support
+
+---
+ backend/configmanager.go | 12 ++++++
+ backend/upload.go        | 92 +++++++++++++++++++++++++++++++---------
+ cli.go                   | 13 +++++-
+ cli_shared.go            |  8 +++-
+ 4 files changed, 103 insertions(+), 22 deletions(-)
+
+diff --git a/backend/configmanager.go b/backend/configmanager.go
+index b2b746f..e3d944a 100644
+--- a/backend/configmanager.go
++++ b/backend/configmanager.go
+@@ -30,6 +30,7 @@ type Config struct {
+ 	AlbumAutoMode                 bool     `json:"albumAutoMode" koanf:"album_auto_mode"`
+ 	SetDateFromFilename           bool     `json:"setDateFromFilename" koanf:"set_date_from_filename"`
+ 	ExcludePattern                string   `json:"excludePattern" koanf:"exclude_pattern"`
++	IncludePattern                string   `json:"includePattern" koanf:"include_pattern"`
+ }
+ 
+ type ConfigManager struct{}
+@@ -146,6 +147,17 @@ func (g *ConfigManager) GetExcludePattern() string {
+ 	return AppConfig.ExcludePattern
+ }
+ 
++func (g *ConfigManager) SetIncludePattern(pattern string) {
++	AppConfig.IncludePattern = pattern
++	_ = saveAppConfig()
++}
++
++func (g *ConfigManager) GetIncludePattern() string {
++	configMu.RLock()
++	defer configMu.RUnlock()
++	return AppConfig.IncludePattern
++}
++
+ func (g *ConfigManager) AddCredentials(newAuthString string) error {
+ 	// Required fields that must be present in the auth string
+ 	requiredFields := []string{
+diff --git a/backend/upload.go b/backend/upload.go
+index 544cfac..04ff066 100644
+--- a/backend/upload.go
++++ b/backend/upload.go
+@@ -8,7 +8,6 @@ import (
+ 	"path/filepath"
+ 	"strings"
+ 	"sync"
+-
+ )
+ 
+ // FilesDroppedEvent is emitted when files are dropped on any drop zone
+@@ -22,7 +21,6 @@ type StartUploadEvent struct {
+ 	Files []string `json:"files"`
+ }
+ 
+-
+ // ProgressCallback is a function type for upload progress updates
+ type ProgressCallback func(event string, data any)
+ 
+@@ -325,35 +323,91 @@ func isSupportedByGooglePhotos(filename string) bool {
+ 	return supportedFormats[ext[1:]]
+ }
+ 
+-func scanDirectoryForFiles(path string, recursive bool, excludePattern string) ([]string, error) {
++func scanDirectoryForFiles(path string, recursive bool, excludePattern string, includePattern string) ([]string, error) {
+ 	var files []string
++	excludePatterns := splitDirectoryPatterns(excludePattern)
++	includePatterns := splitDirectoryPatterns(includePattern)
++	rootPath := filepath.Clean(path)
+ 
+-	entries, err := os.ReadDir(path)
+-	if err != nil {
+-		return nil, err
+-	}
++	var scan func(string) error
++	scan = func(currentPath string) error {
++		entries, err := os.ReadDir(currentPath)
++		if err != nil {
++			return err
++		}
+ 
+-	for _, entry := range entries {
+-		fullPath := filepath.Join(path, entry.Name())
+-		if entry.IsDir() {
+-			if excludePattern != "" && entry.Name() == excludePattern {
+-				continue
+-			}
+-			if recursive {
+-				subFiles, err := scanDirectoryForFiles(fullPath, recursive, excludePattern)
++		for _, entry := range entries {
++			fullPath := filepath.Join(currentPath, entry.Name())
++			if entry.IsDir() {
++				relPath, err := filepath.Rel(rootPath, fullPath)
+ 				if err != nil {
++					relPath = entry.Name()
++				}
++				if matchesDirectoryPattern(relPath, excludePatterns) {
+ 					continue
+ 				}
+-				files = append(files, subFiles...)
++				if recursive {
++					if err := scan(fullPath); err != nil {
++						continue
++					}
++				}
++			} else {
++				if len(includePatterns) > 0 {
++					relDir, err := filepath.Rel(rootPath, currentPath)
++					if err != nil || relDir == "." {
++						continue
++					}
++					if !matchesDirectoryPattern(relDir, includePatterns) {
++						continue
++					}
++				}
++				files = append(files, fullPath)
+ 			}
+-		} else {
+-			files = append(files, fullPath)
+ 		}
++
++		return nil
++	}
++
++	if err := scan(rootPath); err != nil {
++		return nil, err
+ 	}
+ 
+ 	return files, nil
+ }
+ 
++func splitDirectoryPatterns(patterns string) []string {
++	if strings.TrimSpace(patterns) == "" {
++		return nil
++	}
++	parts := strings.Split(patterns, ",")
++	result := make([]string, 0, len(parts))
++	for _, part := range parts {
++		part = strings.Trim(strings.TrimSpace(part), string(filepath.Separator))
++		if part != "" {
++			result = append(result, part)
++		}
++	}
++	return result
++}
++
++func matchesDirectoryPattern(relPath string, patterns []string) bool {
++	relPath = filepath.Clean(relPath)
++	if relPath == "." || relPath == string(filepath.Separator) {
++		return false
++	}
++	for _, pattern := range patterns {
++		if relPath == pattern || strings.HasPrefix(relPath, pattern+string(filepath.Separator)) {
++			return true
++		}
++		for _, part := range strings.Split(relPath, string(filepath.Separator)) {
++			if part == pattern {
++				return true
++			}
++		}
++	}
++	return false
++}
++
+ // FilterGooglePhotosFiles returns a list of files that are supported by Google Photos (exported)
+ func FilterGooglePhotosFiles(paths []string) ([]string, error) {
+ 	return filterGooglePhotosFiles(paths)
+@@ -370,7 +424,7 @@ func filterGooglePhotosFiles(paths []string) ([]string, error) {
+ 		}
+ 
+ 		if fileInfo.IsDir() {
+-			files, err := scanDirectoryForFiles(path, AppConfig.Recursive, AppConfig.ExcludePattern)
++			files, err := scanDirectoryForFiles(path, AppConfig.Recursive, AppConfig.ExcludePattern, AppConfig.IncludePattern)
+ 			if err != nil {
+ 				return nil, fmt.Errorf("error scanning directory %s: %v", path, err)
+ 			}
+diff --git a/cli.go b/cli.go
+index b015cbb..65e0397 100644
+--- a/cli.go
++++ b/cli.go
+@@ -1,10 +1,10 @@
+ package main
+ 
+ import (
+-	"os"
+ 	"encoding/json"
+ 	"fmt"
+ 	"log/slog"
++	"os"
+ 	"strings"
+ 
+ 	"app/backend"
+@@ -23,6 +23,7 @@ type cliConfig struct {
+ 	disableUnsupportedFilesFilter bool
+ 	setDateFromFilename           bool
+ 	excludePattern                string
++	includePattern                string
+ 	logLevel                      string
+ 	configPath                    string
+ 	albumName                     string
+@@ -281,6 +282,7 @@ func runCLIUpload(filePaths []string, config cliConfig) error {
+ 	backend.AppConfig.DisableUnsupportedFilesFilter = config.disableUnsupportedFilesFilter
+ 	backend.AppConfig.SetDateFromFilename = config.setDateFromFilename
+ 	backend.AppConfig.ExcludePattern = config.excludePattern
++	backend.AppConfig.IncludePattern = config.includePattern
+ 
+ 	// Handle album option - check for AUTO mode
+ 	if strings.ToUpper(config.albumName) == "AUTO" {
+@@ -296,7 +298,14 @@ func runCLIUpload(filePaths []string, config cliConfig) error {
+ 
+ 	// Start bubbletea program
+ 	model := initialModel()
+-	r, w, _ := os.Pipe(); if w != nil { w.Close() }; if r == nil { r = os.Stdin }; p := tea.NewProgram(model, tea.WithInput(r))
++	r, w, _ := os.Pipe()
++	if w != nil {
++		w.Close()
++	}
++	if r == nil {
++		r = os.Stdin
++	}
++	p := tea.NewProgram(model, tea.WithInput(r))
+ 
+ 	// Progress writer: writes structured JSON for the web UI on every event.
+ 	pw := newProgressWriter()
+diff --git a/cli_shared.go b/cli_shared.go
+index ef92979..450d96d 100644
+--- a/cli_shared.go
++++ b/cli_shared.go
+@@ -51,7 +51,8 @@ func runCLI() {
+ 			fmt.Println("  -d, --delete                 Delete from host after upload")
+ 			fmt.Println("  -df, --disable-filter        Disable file type filtering")
+ 			fmt.Println("  --date-from-filename         Set media date from filename (e.g. 20240709_182027.jpg)")
+-			fmt.Println("  -e, --exclude <pattern>      Exclude directories whose name matches pattern (e.g. @eaDir)")
++			fmt.Println("  -e, --exclude <patterns>     Exclude directories matching comma-separated names/paths (e.g. @eaDir,Cache)")
++			fmt.Println("  --include <patterns>         Only upload files under matching comma-separated names/paths")
+ 			fmt.Println("  -a, --album <name>           Add uploaded files to album (creates if needed)")
+ 			fmt.Println("                               Use 'AUTO' to create albums based on folder names")
+ 			fmt.Println("  -l, --log-level <level>      Set log level: debug, info, warn, error (default: info)")
+@@ -99,6 +100,11 @@ func runCLI() {
+ 					config.excludePattern = os.Args[i+1]
+ 					i++
+ 				}
++			case "--include":
++				if i+1 < len(os.Args) {
++					config.includePattern = os.Args[i+1]
++					i++
++				}
+ 			case "--threads", "-t":
+ 				if i+1 < len(os.Args) {
+ 					_, _ = fmt.Sscanf(os.Args[i+1], "%d", &config.threads)
+-- 
+2.54.0
+

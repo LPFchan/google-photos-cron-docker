@@ -154,6 +154,7 @@ function get_source_album_list() {
     GOTOHP_DISABLE_FILTER_LIST=()
     GOTOHP_DATE_FROM_FILENAME_LIST=()
     GOTOHP_EXCLUDE_LIST=()
+    GOTOHP_INCLUDE_LIST=()
     GOTOHP_SKIP_UNCHANGED_LIST=()
     GOTOHP_LOG_LEVEL_LIST=()
     GOTOHP_CREDS_LIST=()
@@ -200,6 +201,7 @@ function get_source_album_list() {
         local DISABLE_FILTER_X="GOTOHP_DISABLE_FILTER_${i}"
         local DATE_FROM_FILENAME_X="GOTOHP_DATE_FROM_FILENAME_${i}"
         local EXCLUDE_X="GOTOHP_EXCLUDE_${i}"
+        local INCLUDE_X="GOTOHP_INCLUDE_${i}"
         local SKIP_UNCHANGED_X="GOTOHP_SKIP_UNCHANGED_${i}"
         local LOG_LEVEL_X="GOTOHP_LOG_LEVEL_${i}"
         local CREDS_X="GOTOHP_CREDS_${i}"
@@ -213,6 +215,7 @@ function get_source_album_list() {
         get_env "${DISABLE_FILTER_X}"
         get_env "${DATE_FROM_FILENAME_X}"
         get_env "${EXCLUDE_X}"
+        get_env "${INCLUDE_X}"
         get_env "${SKIP_UNCHANGED_X}"
         get_env "${LOG_LEVEL_X}"
         get_env "${CREDS_X}"
@@ -226,6 +229,7 @@ function get_source_album_list() {
         GOTOHP_DISABLE_FILTER_LIST+=("${!DISABLE_FILTER_X}")
         GOTOHP_DATE_FROM_FILENAME_LIST+=("${!DATE_FROM_FILENAME_X}")
         GOTOHP_EXCLUDE_LIST+=("${!EXCLUDE_X}")
+        GOTOHP_INCLUDE_LIST+=("${!INCLUDE_X}")
         GOTOHP_SKIP_UNCHANGED_LIST+=("${!SKIP_UNCHANGED_X}")
         GOTOHP_LOG_LEVEL_LIST+=("${!LOG_LEVEL_X}")
         GOTOHP_CREDS_LIST+=("${!CREDS_X}")
@@ -313,6 +317,10 @@ function init_env() {
     get_env GOTOHP_EXCLUDE
     GOTOHP_EXCLUDE="${GOTOHP_EXCLUDE:-""}"
 
+    # GOTOHP_INCLUDE — only upload files under matching directories during recursive walk (default: empty)
+    get_env GOTOHP_INCLUDE
+    GOTOHP_INCLUDE="${GOTOHP_INCLUDE:-""}"
+
     # GOTOHP_SKIP_UNCHANGED — skip gotohp when a source tree metadata fingerprint is unchanged (default: FALSE)
     get_env GOTOHP_SKIP_UNCHANGED
     GOTOHP_SKIP_UNCHANGED=$(echo "${GOTOHP_SKIP_UNCHANGED:-"FALSE"}" | tr '[:lower:]' '[:upper:]')
@@ -353,6 +361,7 @@ function init_env() {
     color yellow "GOTOHP_DISABLE_FILTER: ${GOTOHP_DISABLE_FILTER}"
     color yellow "GOTOHP_DATE_FROM_FILENAME: ${GOTOHP_DATE_FROM_FILENAME}"
     color yellow "GOTOHP_EXCLUDE: ${GOTOHP_EXCLUDE:-<none>}"
+    color yellow "GOTOHP_INCLUDE: ${GOTOHP_INCLUDE:-<none>}"
     color yellow "GOTOHP_SKIP_UNCHANGED: ${GOTOHP_SKIP_UNCHANGED}"
     color yellow "GOTOHP_SKIP_UNCHANGED_STATE_DIR: ${GOTOHP_SKIP_UNCHANGED_STATE_DIR}"
     color yellow "GOTOHP_LOG_LEVEL: ${GOTOHP_LOG_LEVEL}"
@@ -368,6 +377,7 @@ function init_env() {
         [[ -n "${GOTOHP_DISABLE_FILTER_LIST[${i}]}" ]]     && color yellow "  GOTOHP_DISABLE_FILTER_${i}: ${GOTOHP_DISABLE_FILTER_LIST[${i}]} (override)"
         [[ -n "${GOTOHP_DATE_FROM_FILENAME_LIST[${i}]}" ]] && color yellow "  GOTOHP_DATE_FROM_FILENAME_${i}: ${GOTOHP_DATE_FROM_FILENAME_LIST[${i}]} (override)"
         [[ -n "${GOTOHP_EXCLUDE_LIST[${i}]}" ]]           && color yellow "  GOTOHP_EXCLUDE_${i}: ${GOTOHP_EXCLUDE_LIST[${i}]} (override)"
+        [[ -n "${GOTOHP_INCLUDE_LIST[${i}]}" ]]           && color yellow "  GOTOHP_INCLUDE_${i}: ${GOTOHP_INCLUDE_LIST[${i}]} (override)"
         [[ -n "${GOTOHP_SKIP_UNCHANGED_LIST[${i}]}" ]]    && color yellow "  GOTOHP_SKIP_UNCHANGED_${i}: ${GOTOHP_SKIP_UNCHANGED_LIST[${i}]} (override)"
         [[ -n "${GOTOHP_LOG_LEVEL_LIST[${i}]}" ]]          && color yellow "  GOTOHP_LOG_LEVEL_${i}: ${GOTOHP_LOG_LEVEL_LIST[${i}]} (override)"
         [[ -n "${GOTOHP_CREDS_LIST[${i}]}" ]]              && color yellow "  GOTOHP_CREDS_${i}: <set> (override)"

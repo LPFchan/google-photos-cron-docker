@@ -27,7 +27,8 @@ services:
       GOTOHP_DELETE: "FALSE"        # delete source file after upload
       GOTOHP_DISABLE_FILTER: "FALSE"        # upload all file types (not just media)
       GOTOHP_DATE_FROM_FILENAME: "FALSE"    # parse date from filename
-      GOTOHP_EXCLUDE: ""               # skip dirs matching this name (e.g. @eaDir)
+      GOTOHP_EXCLUDE: ""               # skip dirs matching comma-separated names/paths (e.g. @eaDir,Cache)
+      GOTOHP_INCLUDE: ""               # optional whitelist of comma-separated dir names/paths
       GOTOHP_SKIP_UNCHANGED: "FALSE"   # opt-in: skip source trees unchanged since last successful run
       GOTOHP_LOG_LEVEL: "info"      # debug | info | warn | error
       GOTOHP_PROGRESS_LOG_INTERVAL: "60"  # seconds between Docker log progress summaries; 0 disables
@@ -72,8 +73,9 @@ services:
   #     ALBUM_NAME_1: "Screenshots"
       #     # Override recursive for this pair only (disable sub-directory scan)
       #     GOTOHP_RECURSIVE_1: "FALSE"
-      #     # Override exclude for this pair only
-      #     GOTOHP_EXCLUDE_1: "@eaDir"
+      #     # Override exclude/include filters for this pair only
+      #     GOTOHP_EXCLUDE_1: "@eaDir,Cache"
+      #     GOTOHP_INCLUDE_1: "Screenshots,Exports"
   #     # Per-pair credential override — upload pair 1 to a different Google account
   #     # GOTOHP_CREDS_1: "androidId=BBBB..."
   #     # GOTOHP_EMAIL_1: "bob@gmail.com"

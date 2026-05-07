@@ -62,6 +62,9 @@ function build_gotohp_flags() {
     local EXCLUDE="${GOTOHP_EXCLUDE_LIST[${i}]:-${GOTOHP_EXCLUDE}}"
     # Expose for use by pre-flight scans and skip-unchanged fingerprints.
     GOTOHP_EFFECTIVE_EXCLUDE="${EXCLUDE}"
+    local INCLUDE="${GOTOHP_INCLUDE_LIST[${i}]:-${GOTOHP_INCLUDE}}"
+    # Expose for use by pre-flight scans and skip-unchanged fingerprints.
+    GOTOHP_EFFECTIVE_INCLUDE="${INCLUDE}"
 
     GOTOHP_FLAGS+=("--threads" "${THREADS}")
     GOTOHP_FLAGS+=("--log-level" "${LOG_LEVEL}")
@@ -84,12 +87,61 @@ function build_gotohp_flags() {
     if [[ -n "${EXCLUDE}" ]]; then
         GOTOHP_FLAGS+=("--exclude" "${EXCLUDE}")
     fi
+    if [[ -n "${INCLUDE}" ]]; then
+        GOTOHP_FLAGS+=("--include" "${INCLUDE}")
+    fi
+}
+
+########################################
+# Split a comma-separated directory pattern list into a named array.
+# Whitespace around entries is ignored; empty entries are dropped.
+# Arguments:
+#     list value
+#     output array variable name
+########################################
+function split_pattern_list() {
+    local list="$1"
+    local output_name="$2"
+    local -n output_ref="${output_name}"
+    local item
+
+    output_ref=()
+    IFS=',' read -ra _PATTERN_ITEMS <<< "${list}"
+    for item in "${_PATTERN_ITEMS[@]}"; do
+        item="${item#"${item%%[![:space:]]*}"}"
+        item="${item%"${item##*[![:space:]]}"}"
+        [[ -z "${item}" ]] && continue
+        item="${item#/}"
+        item="${item%/}"
+        output_ref+=("${item}")
+    done
+}
+
+########################################
+# Return success when a source-relative path is included by an include pattern.
+# Patterns match either an exact source-relative directory path or any directory
+# basename in that path.
+########################################
+function path_matches_include_patterns() {
+    local rel_path="$1"
+    shift
+    local pattern component
+
+    [[ -z "${rel_path}" ]] && return 1
+    for pattern in "$@"; do
+        [[ "${rel_path}" == "${pattern}" ]] && return 0
+        IFS='/' read -ra _PATH_COMPONENTS <<< "${rel_path}"
+        for component in "${_PATH_COMPONENTS[@]}"; do
+            [[ "${component}" == "${pattern}" ]] && return 0
+        done
+    done
+    return 1
 }
 
 ########################################
 # Build find prune arguments matching gotohp's recursive --exclude behaviour.
-# The patched gotohp CLI excludes child directories whose basename equals the
-# configured pattern.  The source root itself is still scanned.
+# The patched gotohp CLI excludes child directories whose basename matches any
+# configured comma-separated pattern.  The source root itself is still scanned.
 # Arguments:
 #     recursive flag (TRUE/FALSE)
 #     exclude pattern
@@ -102,7 +154,62 @@ function build_find_prune_args() {
 
     FIND_PRUNE_ARGS=()
     if [[ "${recursive}" == "TRUE" && -n "${exclude}" ]]; then
-        FIND_PRUNE_ARGS=("(" "-mindepth" "1" "-type" "d" "-name" "${exclude}" "-prune" ")" "-o")
+        local -a exclude_patterns=()
+        local pattern first_pattern
+        split_pattern_list "${exclude}" exclude_patterns
+        if [[ "${#exclude_patterns[@]}" -gt 0 ]]; then
+            FIND_PRUNE_ARGS=("(" "-mindepth" "1" "-type" "d" "(")
+            first_pattern="TRUE"
+            for pattern in "${exclude_patterns[@]}"; do
+                [[ "${first_pattern}" == "TRUE" ]] || FIND_PRUNE_ARGS+=("-o")
+                FIND_PRUNE_ARGS+=("-name" "${pattern}")
+                first_pattern="FALSE"
+            done
+            FIND_PRUNE_ARGS+=(")" "-prune" ")" "-o")
+        fi
+    fi
+}
+
+########################################
+# Build find root paths for include allowlists. When includes are configured,
+# scans are rooted at matching subdirectories and direct source-root files are
+# intentionally ignored, matching gotohp's recursive whitelist behaviour.
+# Arguments:
+#     source path
+#     recursive flag (TRUE/FALSE)
+#     include pattern list
+# Outputs:
+#     FIND_ROOT_ARGS array
+########################################
+function build_find_root_args() {
+    local source="$1"
+    local recursive="$2"
+    local include="$3"
+
+    FIND_ROOT_ARGS=("${source}")
+    if [[ -z "${include}" ]]; then
+        return 0
+    fi
+    if [[ "${recursive}" != "TRUE" ]]; then
+        return 1
+    fi
+
+    local -a include_patterns=()
+    local path rel_path
+    split_pattern_list "${include}" include_patterns
+    [[ "${#include_patterns[@]}" -gt 0 ]] || return 0
+
+    FIND_ROOT_ARGS=()
+    while IFS= read -r -d '' path; do
+        rel_path="${path#"${source}"}"
+        rel_path="${rel_path#/}"
+        if path_matches_include_patterns "${rel_path}" "${include_patterns[@]}"; then
+            FIND_ROOT_ARGS+=("${path}")
+        fi
+    done < <(find -- "${source}" -mindepth 1 -type d -print0)
+
+    if [[ "${#FIND_ROOT_ARGS[@]}" -eq 0 ]]; then
+        return 1
     fi
 }
 
@@ -114,7 +221,8 @@ function build_find_prune_args() {
 # Arguments:
 #     source path
 #     recursive flag (TRUE/FALSE)
-#     exclude pattern
+#     exclude pattern list
+#     include pattern list
 # Outputs:
 #     TREE_FINGERPRINT global variable
 # Returns:
@@ -124,6 +232,7 @@ function compute_tree_fingerprint() {
     local source="$1"
     local recursive="$2"
     local exclude="$3"
+    local include="$4"
 
     local -a depth_args=()
     if [[ "${recursive}" != "TRUE" ]]; then
@@ -131,9 +240,15 @@ function compute_tree_fingerprint() {
     fi
 
     local -a prune_args=()
-    if [[ "${recursive}" == "TRUE" && -n "${exclude}" ]]; then
-        prune_args=("(" "-mindepth" "1" "-type" "d" "-name" "${exclude}" "-prune" ")" "-o")
+    build_find_prune_args "${recursive}" "${exclude}"
+    prune_args=("${FIND_PRUNE_ARGS[@]}")
+
+    local -a root_args=()
+    if ! build_find_root_args "${source}" "${recursive}" "${include}"; then
+        TREE_FINGERPRINT="NO_INCLUDED_DIRECTORIES"
+        return 0
     fi
+    root_args=("${FIND_ROOT_ARGS[@]}")
 
     local manifest_file sorted_file error_file hash_line
     manifest_file="$(mktemp)" || return 1
@@ -146,9 +261,9 @@ function compute_tree_fingerprint() {
         return 1
     }
 
-    if ! find -- "${source}" "${depth_args[@]}" "${prune_args[@]}" \
-        "(" "-type" "d" "-printf" 'd\t%P\t\t\t\t%m\t%U\t%G\t%i\t\0' ")" "-o" \
-        "(" "!" "-type" "d" "-printf" '%y\t%P\t%s\t%T@\t%C@\t%m\t%U\t%G\t%i\t%l\0' ")" \
+    if ! find -- "${root_args[@]}" "${depth_args[@]}" "${prune_args[@]}" \
+        "(" "-type" "d" "-printf" 'd\t%p\t\t\t\t%m\t%U\t%G\t%i\t\0' ")" "-o" \
+        "(" "!" "-type" "d" "-printf" '%y\t%p\t%s\t%T@\t%C@\t%m\t%U\t%G\t%i\t%l\0' ")" \
         > "${manifest_file}" 2> "${error_file}"; then
         color red "Error fingerprinting source path (find failed): ${source}"
         color red "find output: $(<"${error_file}")"
@@ -190,6 +305,7 @@ function build_pair_state_file() {
     local disable_filter="$7"
     local date_from_filename="$8"
     local exclude="$9"
+    local include="${10}"
 
     local key_hash_line key_hash
     key_hash_line="$(printf '%q\n' \
@@ -203,6 +319,7 @@ function build_pair_state_file() {
         "disable_filter=${disable_filter}" \
         "date_from_filename=${date_from_filename}" \
         "exclude=${exclude}" \
+        "include=${include}" \
         | sha256sum)" || return 1
     key_hash="${key_hash_line%% *}"
     PAIR_STATE_FILE="${SKIP_UNCHANGED_STATE_DIR}/${key_hash}.state"
@@ -470,6 +587,10 @@ for i in "${INDICES_TO_PROCESS[@]}"; do
     fi
 
     build_find_prune_args "${GOTOHP_EFFECTIVE_RECURSIVE}" "${GOTOHP_EFFECTIVE_EXCLUDE}"
+    if ! build_find_root_args "${SOURCE}" "${GOTOHP_EFFECTIVE_RECURSIVE}" "${GOTOHP_EFFECTIVE_INCLUDE}"; then
+        color yellow "No included directories found in source path, skipping: ${SOURCE}"
+        continue
+    fi
 
     # Build a find name expression that mirrors gotohp's own extension filter.
     # When the filter is disabled, any regular file counts; otherwise only
@@ -497,7 +618,7 @@ for i in "${INDICES_TO_PROCESS[@]}"; do
 
     # Pre-flight check: distinguish "no files" from a real find failure so that
     # permission errors or unreadable mounts are not silently treated as empty.
-    FIND_OUTPUT="$(find -- "${SOURCE}" "${FIND_DEPTH_ARGS[@]}" "${FIND_PRUNE_ARGS[@]}" -type f "${FIND_NAME_ARGS[@]}" -print -quit 2>&1)"
+    FIND_OUTPUT="$(find -- "${FIND_ROOT_ARGS[@]}" "${FIND_DEPTH_ARGS[@]}" "${FIND_PRUNE_ARGS[@]}" -type f "${FIND_NAME_ARGS[@]}" -print -quit 2>&1)"
     FIND_STATUS=$?
     if [[ ${FIND_STATUS} -ne 0 ]]; then
         color red "Error scanning source path (find failed), skipping: ${SOURCE}"
@@ -516,7 +637,7 @@ for i in "${INDICES_TO_PROCESS[@]}"; do
     if [[ "${GOTOHP_EFFECTIVE_SKIP_UNCHANGED}" == "TRUE" ]]; then
         if [[ "${GOTOHP_EFFECTIVE_FORCE}" == "TRUE" ]]; then
             color yellow "Skip-unchanged disabled for this run because GOTOHP_FORCE is TRUE: ${SOURCE}"
-        elif compute_tree_fingerprint "${SOURCE}" "${GOTOHP_EFFECTIVE_RECURSIVE}" "${GOTOHP_EFFECTIVE_EXCLUDE}"; then
+        elif compute_tree_fingerprint "${SOURCE}" "${GOTOHP_EFFECTIVE_RECURSIVE}" "${GOTOHP_EFFECTIVE_EXCLUDE}" "${GOTOHP_EFFECTIVE_INCLUDE}"; then
             CURRENT_FINGERPRINT="${TREE_FINGERPRINT}"
             if build_pair_state_file \
                 "${SOURCE}" \
@@ -527,7 +648,8 @@ for i in "${INDICES_TO_PROCESS[@]}"; do
                 "${GOTOHP_EFFECTIVE_DELETE}" \
                 "${GOTOHP_EFFECTIVE_DISABLE_FILTER}" \
                 "${GOTOHP_EFFECTIVE_DATE_FROM_FILENAME}" \
-                "${GOTOHP_EFFECTIVE_EXCLUDE}"; then
+                "${GOTOHP_EFFECTIVE_EXCLUDE}" \
+                "${GOTOHP_EFFECTIVE_INCLUDE}"; then
                 CURRENT_STATE_FILE="${PAIR_STATE_FILE}"
                 SHOULD_TRACK_STATE="TRUE"
                 if [[ -f "${CURRENT_STATE_FILE}" ]]; then
@@ -564,7 +686,7 @@ for i in "${INDICES_TO_PROCESS[@]}"; do
     else
         color green "Upload complete: ${SOURCE}"
         if [[ "${SHOULD_TRACK_STATE}" == "TRUE" ]]; then
-            if compute_tree_fingerprint "${SOURCE}" "${GOTOHP_EFFECTIVE_RECURSIVE}" "${GOTOHP_EFFECTIVE_EXCLUDE}"; then
+            if compute_tree_fingerprint "${SOURCE}" "${GOTOHP_EFFECTIVE_RECURSIVE}" "${GOTOHP_EFFECTIVE_EXCLUDE}" "${GOTOHP_EFFECTIVE_INCLUDE}"; then
                 STATE_UPDATES+=("${CURRENT_STATE_FILE}" "${TREE_FINGERPRINT}")
             else
                 HAS_ERROR="TRUE"
