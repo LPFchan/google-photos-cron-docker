@@ -116,6 +116,7 @@ function init_env() {
     GOTOHP_SKIP_UNCHANGED_STATE_DIR="${skip_unchanged_state_dir}"
     GOTOHP_LOG_LEVEL="info"
     GOTOHP_PROGRESS_LOG_INTERVAL="${progress_log_interval}"
+    GOTOHP_UPLOAD_RAW_LOGS="FALSE"
     GOTOHP_EMAIL="${global_email}"
     CRON_OVERLAP="${cron_overlap}"
 }
@@ -623,6 +624,7 @@ function init_env() {
     GOTOHP_SKIP_UNCHANGED_STATE_DIR="${env_dir}/config/skip-unchanged"
     GOTOHP_LOG_LEVEL="info"
     GOTOHP_PROGRESS_LOG_INTERVAL="60"
+    GOTOHP_UPLOAD_RAW_LOGS="FALSE"
     GOTOHP_EMAIL=""
     CRON_OVERLAP="${cron_overlap}"
 }
@@ -1069,9 +1071,9 @@ cat > "${SCRATCH}/t35/bin/gotohp" << EOF
 #!/bin/bash
 echo "\$*" >> "${GOTOHP_CALLS}"
 if [[ "\$*" == upload* ]]; then
-    printf '%s' '{"state":"running","total_files":5,"total_bytes":1000,"completed":2,"failed":1,"bytes_uploaded":400}' > "${PROGRESS35}"
+    printf '%s' '{"state":"running","total_files":5,"total_bytes":1000,"completed":2,"failed":1,"bytes_uploaded":400,"threads":[{"worker_id":0,"status":"hashing","file_name":"photo.jpg"}],"recent_results":[]}' > "${PROGRESS35}"
     sleep 2
-    printf '%s' '{"state":"complete","total_files":5,"total_bytes":1000,"completed":4,"failed":1,"bytes_uploaded":1000}' > "${PROGRESS35}"
+    printf '%s' '{"state":"complete","total_files":5,"total_bytes":1000,"completed":4,"failed":1,"bytes_uploaded":1000,"threads":[],"recent_results":[]}' > "${PROGRESS35}"
 fi
 EOF
 chmod +x "${SCRATCH}/t35/bin/gotohp"
@@ -1086,6 +1088,9 @@ elif ! grep -q "Upload progress .*2/5 succeeded, 1 failed, 400/1000 bytes upload
     cat "${SCRATCH}/t35_out.txt"
 elif ! grep -q "Upload final .*4/5 succeeded, 1 failed, 1000/1000 bytes uploaded" "${SCRATCH}/t35_out.txt" 2>/dev/null; then
     fail "Test 35: final upload progress summary was not logged"
+    cat "${SCRATCH}/t35_out.txt"
+elif ! grep -q "workers: \[0\] hashing: photo.jpg" "${SCRATCH}/t35_out.txt" 2>/dev/null; then
+    fail "Test 35: worker status was not included in periodic progress summary"
     cat "${SCRATCH}/t35_out.txt"
 else
     pass "Test 35: periodic and final progress summaries logged"
@@ -1118,6 +1123,36 @@ elif grep -q "Upload progress\|Upload final" "${SCRATCH}/t36_out.txt" 2>/dev/nul
     cat "${SCRATCH}/t36_out.txt"
 else
     pass "Test 36: progress summaries disabled with interval 0"
+fi
+
+# Test 36b: raw gotohp output is suppressed by default.
+EMPTY36B="${SCRATCH}/t36b_empty"
+FILES36B="${SCRATCH}/t36b_files"
+PROGRESS36B="${SCRATCH}/t36b_progress.json"
+mkdir -p "${EMPTY36B}" "${FILES36B}"
+echo "photo" > "${FILES36B}/photo.jpg"
+
+setup_env "t36b" "${EMPTY36B}" "${FILES36B}" "TRUE" "" "" "" "QUEUE" "" "FALSE" "" "" "" "1"
+cat > "${SCRATCH}/t36b/bin/gotohp" << EOF
+#!/bin/bash
+echo "\$*" >> "${GOTOHP_CALLS}"
+if [[ "\$*" == upload* ]]; then
+    printf '%s' '{"state":"complete","total_files":1,"total_bytes":1,"completed":1,"failed":0,"bytes_uploaded":1}' > "${PROGRESS36B}"
+    printf '\n\nRAW_TUI_SPAM\n\n'
+fi
+EOF
+chmod +x "${SCRATCH}/t36b/bin/gotohp"
+
+RC=0
+GOTOHP_PROGRESS_FILE="${PROGRESS36B}" PATH="${TEST_PATH}" bash "${TEST_BACKUP}" > "${SCRATCH}/t36b_out.txt" 2>&1 || RC=$?
+if [[ $RC -ne 0 ]]; then
+    fail "Test 36b: backup.sh exited with code ${RC}"
+    cat "${SCRATCH}/t36b_out.txt"
+elif grep -q "RAW_TUI_SPAM" "${SCRATCH}/t36b_out.txt" 2>/dev/null; then
+    fail "Test 36b: raw gotohp output should be suppressed by default"
+    cat "${SCRATCH}/t36b_out.txt"
+else
+    pass "Test 36b: raw gotohp output suppressed by default"
 fi
 
 ########################################
