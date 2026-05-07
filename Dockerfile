@@ -21,8 +21,8 @@
 #   0005 – progress_writer.go:     write real-time progress JSON for web UI
 #   0006 – webui_server.go:         "serve" subcommand: embedded Go HTTP server
 #   0007 – cli.go:                 add --exclude flag for recursive directory walks
-#   0008 – backend/api.go:         forward all auth fields + accept it= token format
-#   0009 – backend/api.go:         GOTOHP_BEARER_TOKEN env var for manual token override
+#   0008 – backend/api.go:         request upload-valid Auth bearer tokens
+#   0009 – backend/tokenbinding.go: decrypt Android 16+ TokenEncrypted Auth
 FROM golang:1.26-alpine AS builder
 
 ARG GOTOHP_VERSION=v0.7.0
