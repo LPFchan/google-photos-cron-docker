@@ -106,6 +106,44 @@ function progress_json_number() {
 }
 
 ########################################
+# Build a compact worker summary from gotohp's progress JSON threads array.
+# This intentionally avoids raw Bubble Tea output while preserving the useful
+# TUI information: worker id, status, and current filename.
+# Arguments:
+#     JSON content
+########################################
+function progress_json_threads_summary() {
+    local json="$1"
+    local threads_json thread worker_id status file_name summary
+
+    threads_json="${json#*\"threads\":[}"
+    [[ "${threads_json}" == "${json}" ]] && return 0
+    threads_json="${threads_json%%],\"recent_results\"*}"
+    [[ -z "${threads_json}" || "${threads_json}" == "]" ]] && return 0
+
+    summary=""
+    while [[ "${threads_json}" =~ \{([^{}]*)\} ]]; do
+        thread="${BASH_REMATCH[1]}"
+        threads_json="${threads_json#*\}}"
+
+        worker_id="$(progress_json_number "{${thread}}" "worker_id")"
+        status="$(progress_json_string "{${thread}}" "status")"
+        file_name="$(progress_json_string "{${thread}}" "file_name")"
+        [[ -z "${status}" && -z "${file_name}" ]] && continue
+
+        if [[ -n "${summary}" ]]; then
+            summary="${summary}; "
+        fi
+        summary="${summary}[${worker_id}] ${status:-unknown}"
+        if [[ -n "${file_name}" ]]; then
+            summary="${summary}: ${file_name}"
+        fi
+    done
+
+    printf '%s' "${summary}"
+}
+
+########################################
 # Emit one Docker-log progress line from gotohp's progress JSON file.
 # Arguments:
 #     source path
@@ -119,7 +157,7 @@ function log_upload_progress() {
 
     [[ -r "${progress_file}" ]] || return 0
 
-    local progress_json state total completed failed bytes_uploaded total_bytes
+    local progress_json state total completed failed bytes_uploaded total_bytes threads_summary
     progress_json="$(<"${progress_file}")"
     [[ -n "${progress_json}" ]] || return 0
 
@@ -129,12 +167,17 @@ function log_upload_progress() {
     failed="$(progress_json_number "${progress_json}" "failed")"
     bytes_uploaded="$(progress_json_number "${progress_json}" "bytes_uploaded")"
     total_bytes="$(progress_json_number "${progress_json}" "total_bytes")"
+    threads_summary="$(progress_json_threads_summary "${progress_json}")"
 
     if [[ "${state:-idle}" == "idle" && "${total}" == "0" && "${completed}" == "0" && "${failed}" == "0" ]]; then
         return 0
     fi
 
-    color blue "Upload ${label} $(color yellow "[${source}]"): ${completed}/${total} succeeded, ${failed} failed, ${bytes_uploaded}/${total_bytes} bytes uploaded (state: ${state:-unknown})"
+    if [[ -n "${threads_summary}" && "${state:-unknown}" == "running" ]]; then
+        color blue "Upload ${label} $(color yellow "[${source}]"): ${completed}/${total} succeeded, ${failed} failed, ${bytes_uploaded}/${total_bytes} bytes uploaded (state: ${state:-unknown}) | workers: ${threads_summary}"
+    else
+        color blue "Upload ${label} $(color yellow "[${source}]"): ${completed}/${total} succeeded, ${failed} failed, ${bytes_uploaded}/${total_bytes} bytes uploaded (state: ${state:-unknown})"
+    fi
 }
 
 ########################################
@@ -153,14 +196,22 @@ function run_gotohp_upload_with_progress() {
     fi
 
     if [[ "${interval}" == "0" ]]; then
-        gotohp upload "${source}" "$@"
+        if [[ "${GOTOHP_UPLOAD_RAW_LOGS:-FALSE}" == "TRUE" ]]; then
+            gotohp upload "${source}" "$@"
+        else
+            gotohp upload "${source}" "$@" >/tmp/gotohp-upload.log 2>&1
+        fi
         return $?
     fi
 
     local progress_file="${GOTOHP_PROGRESS_FILE:-/tmp/gotohp-progress.json}"
     local upload_pid elapsed rc
 
-    gotohp upload "${source}" "$@" &
+    if [[ "${GOTOHP_UPLOAD_RAW_LOGS:-FALSE}" == "TRUE" ]]; then
+        gotohp upload "${source}" "$@" &
+    else
+        gotohp upload "${source}" "$@" >/tmp/gotohp-upload.log 2>&1 &
+    fi
     upload_pid=$!
     elapsed=0
 
