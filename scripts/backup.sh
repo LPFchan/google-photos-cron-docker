@@ -73,6 +73,112 @@ function build_gotohp_flags() {
     fi
 }
 
+########################################
+# Extract a simple top-level string field from gotohp's compact progress JSON.
+# Arguments:
+#     JSON content
+#     field name
+########################################
+function progress_json_string() {
+    local json="$1"
+    local field="$2"
+    local regex="\"${field}\":\"([^\"]*)\""
+    if [[ "${json}" =~ ${regex} ]]; then
+        printf '%s' "${BASH_REMATCH[1]}"
+    fi
+}
+
+########################################
+# Extract a simple top-level numeric field from gotohp's compact progress JSON.
+# Arguments:
+#     JSON content
+#     field name
+########################################
+function progress_json_number() {
+    local json="$1"
+    local field="$2"
+    local regex="\"${field}\":([0-9]+(\.[0-9]+)?)"
+    if [[ "${json}" =~ ${regex} ]]; then
+        printf '%s' "${BASH_REMATCH[1]}"
+    else
+        printf '0'
+    fi
+}
+
+########################################
+# Emit one Docker-log progress line from gotohp's progress JSON file.
+# Arguments:
+#     source path
+#     progress JSON file path
+#     label (optional; e.g. final)
+########################################
+function log_upload_progress() {
+    local source="$1"
+    local progress_file="$2"
+    local label="${3:-progress}"
+
+    [[ -r "${progress_file}" ]] || return 0
+
+    local progress_json state total completed failed bytes_uploaded total_bytes
+    progress_json="$(<"${progress_file}")"
+    [[ -n "${progress_json}" ]] || return 0
+
+    state="$(progress_json_string "${progress_json}" "state")"
+    total="$(progress_json_number "${progress_json}" "total_files")"
+    completed="$(progress_json_number "${progress_json}" "completed")"
+    failed="$(progress_json_number "${progress_json}" "failed")"
+    bytes_uploaded="$(progress_json_number "${progress_json}" "bytes_uploaded")"
+    total_bytes="$(progress_json_number "${progress_json}" "total_bytes")"
+
+    if [[ "${state:-idle}" == "idle" && "${total}" == "0" && "${completed}" == "0" && "${failed}" == "0" ]]; then
+        return 0
+    fi
+
+    color blue "Upload ${label} $(color yellow "[${source}]"): ${completed}/${total} succeeded, ${failed} failed, ${bytes_uploaded}/${total_bytes} bytes uploaded (state: ${state:-unknown})"
+}
+
+########################################
+# Run gotohp upload and periodically mirror progress JSON into Docker logs.
+# Arguments:
+#     source path
+#     gotohp upload flags...
+########################################
+function run_gotohp_upload_with_progress() {
+    local source="$1"
+    shift
+
+    local interval="${GOTOHP_PROGRESS_LOG_INTERVAL:-60}"
+    if ! [[ "${interval}" =~ ^[0-9]+$ ]]; then
+        interval="60"
+    fi
+
+    if [[ "${interval}" == "0" ]]; then
+        gotohp upload "${source}" "$@"
+        return $?
+    fi
+
+    local progress_file="${GOTOHP_PROGRESS_FILE:-/tmp/gotohp-progress.json}"
+    local upload_pid elapsed rc
+
+    gotohp upload "${source}" "$@" &
+    upload_pid=$!
+    elapsed=0
+
+    while kill -0 "${upload_pid}" 2>/dev/null; do
+        sleep 1
+        elapsed=$((elapsed + 1))
+        if (( elapsed >= interval )); then
+            log_upload_progress "${source}" "${progress_file}"
+            elapsed=0
+        fi
+    done
+
+    wait "${upload_pid}"
+    rc=$?
+    log_upload_progress "${source}" "${progress_file}" "final"
+    return ${rc}
+}
+
 color blue "Running backup at $(date +"%Y-%m-%d %H:%M:%S %Z")"
 
 init_env
@@ -241,7 +347,7 @@ for i in "${INDICES_TO_PROCESS[@]}"; do
 
     color blue "Uploading $(color yellow "[${SOURCE}]") → album $(color yellow "[${ALBUM:-<library root>}]")"
 
-    gotohp upload "${SOURCE}" "${UPLOAD_FLAGS[@]}"
+    run_gotohp_upload_with_progress "${SOURCE}" "${UPLOAD_FLAGS[@]}"
 
     if [[ $? -ne 0 ]]; then
         color red "Upload failed for: ${SOURCE}"
