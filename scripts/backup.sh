@@ -343,6 +343,7 @@ function write_skip_unchanged_state() {
 
     if ! {
         printf '%s\n' "${fingerprint}"
+        printf 'RUN_ID=%s\n' "${RUN_ID:-unknown}"
         printf 'UPDATED_AT=%s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     } > "${tmp_state_file}"; then
         rm -f "${tmp_state_file}"
@@ -514,6 +515,8 @@ function run_gotohp_upload_with_progress() {
     log_upload_progress "${source}" "${progress_file}" "final"
     return ${rc}
 }
+
+RUN_ID="$(date +%s)_$$_${RANDOM}"
 
 color blue "Running backup at $(date +"%Y-%m-%d %H:%M:%S %Z")"
 
@@ -750,8 +753,9 @@ for i in "${INDICES_TO_PROCESS[@]}"; do
                 SHOULD_TRACK_STATE="TRUE"
                 if [[ -f "${CURRENT_STATE_FILE}" ]]; then
                     IFS= read -r PREVIOUS_FINGERPRINT < "${CURRENT_STATE_FILE}" || PREVIOUS_FINGERPRINT=""
+                    PREVIOUS_RUN_ID="$(sed -n 's/^RUN_ID=//p' "${CURRENT_STATE_FILE}" 2>/dev/null || true)"
                     if [[ "${PREVIOUS_FINGERPRINT}" == "${CURRENT_FINGERPRINT}" ]]; then
-                        color green "Source tree unchanged since previous successful run, skipping gotohp: ${SOURCE}"
+                        color green "Source tree unchanged since previous successful run (run ${PREVIOUS_RUN_ID:-unknown}), skipping gotohp: ${SOURCE}"
                         continue
                     fi
                 fi
