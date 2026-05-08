@@ -486,13 +486,16 @@ function run_gotohp_upload_with_progress() {
         return $?
     fi
 
-    local progress_file="${GOTOHP_PROGRESS_FILE:-/tmp/gotohp-progress.json}"
+    if [[ -z "${GOTOHP_PROGRESS_FILE:-}" ]]; then
+        export GOTOHP_PROGRESS_FILE="/tmp/gotohp-progress-$$.json"
+    fi
+    local progress_file="${GOTOHP_PROGRESS_FILE}"
     local upload_pid elapsed rc
 
     if [[ "${GOTOHP_UPLOAD_RAW_LOGS:-FALSE}" == "TRUE" ]]; then
         gotohp upload "${source}" "$@" &
     else
-        gotohp upload "${source}" "$@" >/tmp/gotohp-upload.log 2>&1 &
+        gotohp upload "${source}" "$@" >"/tmp/gotohp-upload-$$.log" 2>&1 &
     fi
     upload_pid=$!
     elapsed=0
