@@ -561,10 +561,38 @@ function finalize_backup_status() {
 
 trap finalize_backup_status EXIT
 
+
+if [[ "${#SOURCE_PATHS[@]}" -eq 0 ]]; then
+    color red "No source paths configured."
+    color red "Set SOURCE_PATH (single source) or SOURCE_PATH_0, SOURCE_PATH_1, … (multiple sources)."
+    exit 1
+fi
+
+HAS_ERROR="FALSE"
+STATE_UPDATES=()
+SKIP_UNCHANGED_STATE_DIR="${GOTOHP_SKIP_UNCHANGED_STATE_DIR:-/config/gotohp-wrapper/skip-unchanged/v1}"
+
+# Determine which pair indices to process.
+# If PAIR_INDICES is set (comma-separated), process only those pairs.
+# If unset, process all pairs (backwards compatibility).
+INDICES_TO_PROCESS=()
+if [[ -n "${PAIR_INDICES:-}" ]]; then
+    IFS=',' read -ra INDICES_TO_PROCESS <<< "${PAIR_INDICES}"
+else
+    INDICES_TO_PROCESS=("${!SOURCE_PATHS[@]}")
+fi
+
 ########################################
-# Handle per-group overlap locking when PAIR_INDICES is set.
-# Uses a lockfile keyed to PAIR_INDICES so different groups never block
-# each other, while same-group concurrency is controlled by CRON_OVERLAP.
+# Acquire overlap lock(s) so that manual triggers (docker exec) and
+# cron-scheduled runs never race on the same progress file, gotohp
+# state, or skip-unchanged state.
+#
+# When PAIR_INDICES is set (cron): original per-group behaviour —
+# different groups can run concurrently, same group queues/skips.
+#
+# When PAIR_INDICES is unset (manual): lock each individual pair index
+# being processed so a cron run targeting any of those pairs blocks
+# and vice versa.
 ########################################
 if [[ -n "${PAIR_INDICES:-}" ]]; then
     GROUP_HASH=$(printf '%s' "${PAIR_INDICES}" | md5sum | cut -d' ' -f1)
@@ -589,26 +617,40 @@ if [[ -n "${PAIR_INDICES:-}" ]]; then
             fi
             ;;
     esac
-fi
-
-if [[ "${#SOURCE_PATHS[@]}" -eq 0 ]]; then
-    color red "No source paths configured."
-    color red "Set SOURCE_PATH (single source) or SOURCE_PATH_0, SOURCE_PATH_1, … (multiple sources)."
-    exit 1
-fi
-
-HAS_ERROR="FALSE"
-STATE_UPDATES=()
-SKIP_UNCHANGED_STATE_DIR="${GOTOHP_SKIP_UNCHANGED_STATE_DIR:-/config/gotohp-wrapper/skip-unchanged/v1}"
-
-# Determine which pair indices to process.
-# If PAIR_INDICES is set (comma-separated), process only those pairs.
-# If unset, process all pairs (backwards compatibility).
-INDICES_TO_PROCESS=()
-if [[ -n "${PAIR_INDICES:-}" ]]; then
-    IFS=',' read -ra INDICES_TO_PROCESS <<< "${PAIR_INDICES}"
 else
-    INDICES_TO_PROCESS=("${!SOURCE_PATHS[@]}")
+    # Manual trigger: lock each pair index individually.
+    # Pre-allocate fd 9 (which the cron path also uses) so downstream
+    # code that references fd 9 works consistently.
+    exec 9>/dev/null
+    LOCK_FDS=()
+    for idx in "${INDICES_TO_PROCESS[@]}"; do
+        PAIR_LOCK="/tmp/schedule-group-$(printf '%s' "${idx}" | md5sum | cut -d' ' -f1).lock"
+        case "${CRON_OVERLAP}" in
+            SKIP)
+                exec {pair_fd}>"${PAIR_LOCK}"
+                if ! flock -n "${pair_fd}"; then
+                    color yellow "Skipping — pair ${idx} is already being processed"
+                    exec {pair_fd}>&-
+                    for held_fd in "${LOCK_FDS[@]}"; do
+                        exec {held_fd}>&-
+                    done
+                    exit 0
+                fi
+                LOCK_FDS+=("${pair_fd}")
+                ;;
+            MULTITHREAD)
+                color blue "Concurrent run for pair ${idx} starting (multithread mode)"
+                ;;
+            QUEUE|*)
+                exec {pair_fd}>"${PAIR_LOCK}"
+                if ! flock -n "${pair_fd}"; then
+                    color blue "Waiting for pair ${idx} to finish…"
+                    flock "${pair_fd}"
+                fi
+                LOCK_FDS+=("${pair_fd}")
+                ;;
+        esac
+    done
 fi
 
 for i in "${INDICES_TO_PROCESS[@]}"; do
