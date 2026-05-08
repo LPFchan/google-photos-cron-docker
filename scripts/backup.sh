@@ -518,6 +518,8 @@ function run_gotohp_upload_with_progress() {
 
 RUN_ID="$(date +%s)_$$_${RANDOM}"
 
+exec >/proc/1/fd/1 2>&1
+
 color blue "Running backup at $(date +"%Y-%m-%d %H:%M:%S %Z")"
 
 init_env
