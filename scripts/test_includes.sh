@@ -27,6 +27,7 @@ override_file="${SCRATCH}/overrides.env"
 cat > "${override_file}" << EOF
 GOTOHP_THREADS=9
 EOF
+chmod 600 "${override_file}"
 export WEBUI_OVERRIDE_FILE="${override_file}"
 export GOTOHP_THREADS="3"
 export_env_file
@@ -45,6 +46,7 @@ printf '11\n' > "${secret_file}"
 cat > "${override_file}" << EOF
 GOTOHP_THREADS_FILE=${secret_file}
 EOF
+chmod 600 "${override_file}"
 export WEBUI_OVERRIDE_FILE="${override_file}"
 export_env_file
 get_env GOTOHP_THREADS
@@ -61,6 +63,7 @@ cat > "${override_file}" << EOF
 not a valid line
 GOTOHP_THREADS=7
 EOF
+chmod 600 "${override_file}"
 export WEBUI_OVERRIDE_FILE="${override_file}"
 export_env_file
 get_env GOTOHP_THREADS
@@ -78,6 +81,7 @@ printf '13\r\n\r\n' > "${secret_file}"
 cat > "${override_file}" << EOF
 GOTOHP_THREADS_FILE=${secret_file}
 EOF
+chmod 600 "${override_file}"
 export WEBUI_OVERRIDE_FILE="${override_file}"
 export_env_file
 get_env GOTOHP_THREADS

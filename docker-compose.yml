@@ -44,6 +44,11 @@ services:
       - gotohp-config:/config             # persists credentials & config
     # ports:
     #   - "5572:5572"
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # ── Multiple sources → multiple albums ──────────────────────────────────────
   # Uncomment and adapt the block below to back up several directories,
@@ -96,6 +101,11 @@ services:
   #     - /path/to/screenshots:/screenshots:ro
   #     - /path/to/videos:/videos:ro
   #     - gotohp-config:/config
+  #   logging:
+  #     driver: local
+  #     options:
+  #       max-size: "10m"
+  #       max-file: "3"
 
 volumes:
   gotohp-config:

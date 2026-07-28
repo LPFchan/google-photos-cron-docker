@@ -1,7 +1,5 @@
 #!/bin/bash
 
-. /app/includes.sh
-
 ########################################
 # Switch the active gotohp credential for a given source/album pair.
 # Per-pair GOTOHP_EMAIL_N takes precedence; falls back to global GOTOHP_EMAIL.
@@ -516,59 +514,95 @@ function run_gotohp_upload_with_progress() {
     return ${rc}
 }
 
+# Establish health-visible per-run state before redirecting or writing anything
+# to Docker's log stream. A SIGKILL intentionally leaves the RUNNING record.
 RUN_ID="$(date +%s)_$$_${RANDOM}"
+RUN_START_EPOCH="$(date +%s)"
+STATUS_LAST_START="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+BACKUP_STATUS_FILE="${BACKUP_STATUS_FILE:-/tmp/backup-status.env}"
+BACKUP_ACTIVE_STATUS_DIR="${BACKUP_ACTIVE_STATUS_DIR:-/tmp/backup-active.d}"
+ACTIVE_STATUS_FILE="${BACKUP_ACTIVE_STATUS_DIR}/${RUN_ID}.env"
 
-exec >/proc/1/fd/1 2>&1
+function write_status_record() {
+    local destination="$1"
+    local state="$2"
+    local exit_code="$3"
+    local last_end=""
+    local status_dir status_base tmp_status_dir tmp_status_file
+
+    [[ "${state}" == "RUNNING" ]] || last_end="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    status_dir="$(dirname "${destination}")"
+    status_base="$(basename "${destination}")"
+    mkdir -p "${status_dir}" || return 1
+    tmp_status_dir="${status_dir}"
+    if [[ "${destination}" == "${ACTIVE_STATUS_FILE}" ]]; then
+        tmp_status_dir="${status_dir}/.tmp"
+        mkdir -p "${tmp_status_dir}" || return 1
+    fi
+    tmp_status_file="$(mktemp "${tmp_status_dir}/${status_base}.tmp.XXXXXX")" || return 1
+    if ! {
+        printf 'RUN_ID=%s\n' "${RUN_ID}"
+        printf 'PID=%s\n' "$$"
+        printf 'PAIR_INDICES=%s\n' "${PAIR_INDICES:-ALL}"
+        printf 'STATE=%s\n' "${state}"
+        printf 'START_EPOCH=%s\n' "${RUN_START_EPOCH}"
+        printf 'LAST_START=%s\n' "${STATUS_LAST_START}"
+        printf 'LAST_END=%s\n' "${last_end}"
+        printf 'EXIT_CODE=%s\n' "${exit_code}"
+    } > "${tmp_status_file}"; then
+        rm -f "${tmp_status_file}"
+        return 1
+    fi
+    if ! mv -f "${tmp_status_file}" "${destination}"; then
+        rm -f "${tmp_status_file}"
+        return 1
+    fi
+}
+
+function finalize_backup_status() {
+    local rc="$1"
+    local state="FAILED"
+    [[ ${rc} -eq 0 ]] && state="SUCCESS"
+
+    # Keep the active record RUNNING unless both terminal writes succeed.
+    # Aggregate state is compatibility/UI state only and may be last-writer-wins.
+    if write_status_record "${BACKUP_STATUS_FILE}" "${state}" "${rc}" \
+        && write_status_record "${ACTIVE_STATUS_FILE}" "${state}" "${rc}"; then
+        rm -f "${ACTIVE_STATUS_FILE}"
+        return
+    fi
+
+    # A status-write failure must not turn a successful invocation into a silent
+    # success. Remove the trap before changing the exit status.
+    if [[ ${rc} -eq 0 ]]; then
+        trap - EXIT
+        exit 1
+    fi
+}
+
+trap 'finalize_backup_status "$?"' EXIT
+# Preserve a signal-derived status for the EXIT trap. Without an explicit TERM
+# handler, Bash can run the EXIT trap with status 0 when TERM arrives while it
+# is waiting for a child, incorrectly recording a timed-out run as successful.
+trap 'exit 143' TERM
+if ! { mkdir -p "${BACKUP_ACTIVE_STATUS_DIR}" \
+    && write_status_record "${ACTIVE_STATUS_FILE}" "RUNNING" "255"; } 2>/dev/null; then
+    # Deliberately avoid logging before the active record exists.
+    trap - EXIT
+    exit 1
+fi
+
+exec >"${BACKUP_LOG_TARGET:-/proc/1/fd/1}" 2>&1
+
+. /app/includes.sh
 
 color blue "Running backup at $(date +"%Y-%m-%d %H:%M:%S %Z")"
 
 init_env
 
-BACKUP_STATUS_FILE="${BACKUP_STATUS_FILE:-/tmp/backup-status.env}"
-mkdir -p "$(dirname "${BACKUP_STATUS_FILE}")"
-STATUS_LAST_START="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-
-function write_backup_status() {
-    local state="$1"
-    local exit_code="$2"
-    local last_end=""
-    if [[ "${state}" != "RUNNING" ]]; then
-        last_end="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-    fi
-    local status_dir status_base tmp_status_file
-    status_dir="$(dirname "${BACKUP_STATUS_FILE}")"
-    status_base="$(basename "${BACKUP_STATUS_FILE}")"
-    tmp_status_file="$(mktemp "${status_dir}/${status_base}.tmp.XXXXXX")" || return 1
-    if ! {
-        echo "STATE=${state}"
-        echo "LAST_START=${STATUS_LAST_START}"
-        echo "LAST_END=${last_end}"
-        echo "EXIT_CODE=${exit_code}"
-        echo "PAIR_INDICES=${PAIR_INDICES:-ALL}"
-    } > "${tmp_status_file}"; then
-        rm -f "${tmp_status_file}"
-        return 1
-    fi
-    if ! mv -f "${tmp_status_file}" "${BACKUP_STATUS_FILE}"; then
-        rm -f "${tmp_status_file}"
-        return 1
-    fi
-}
-
-# 255 is used as a sentinel while a run is still in progress.
-write_backup_status "RUNNING" "255"
-
-function finalize_backup_status() {
-    local rc=$?
-    if [[ ${rc} -eq 0 ]]; then
-        write_backup_status "SUCCESS" "${rc}"
-    else
-        write_backup_status "FAILED" "${rc}"
-    fi
-}
-
-trap finalize_backup_status EXIT
-
+# Preserve the aggregate status file for the existing web UI. It is explicitly
+# not used by the healthcheck because concurrent runs are last-writer-wins here.
+write_status_record "${BACKUP_STATUS_FILE}" "RUNNING" "255" || exit 1
 
 if [[ "${#SOURCE_PATHS[@]}" -eq 0 ]]; then
     color red "No source paths configured."

@@ -76,7 +76,7 @@ FROM alpine:3.21
 ENV XDG_CONFIG_HOME=/config \
     LOCALTIME_FILE="/tmp/localtime"
 
-RUN apk add --no-cache bash findutils supercronic tzdata \
+RUN apk add --no-cache bash coreutils findutils supercronic tzdata \
     && ln -sf "${LOCALTIME_FILE}" /etc/localtime
 
 COPY --from=builder /usr/local/bin/gotohp /usr/local/bin/gotohp
@@ -86,5 +86,8 @@ COPY scripts/*.sh /app/
 RUN chmod +x /app/*.sh
 
 VOLUME ["/config"]
+
+HEALTHCHECK --interval=1m --timeout=10s --start-period=30s --retries=1 \
+    CMD ["/app/backup-healthcheck.sh"]
 
 ENTRYPOINT ["/app/entrypoint.sh"]

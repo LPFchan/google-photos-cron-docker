@@ -15,14 +15,14 @@ function configure_timezone() {
 # Requires SCHEDULE_GROUPS to be built before calling (see build_schedule_groups).
 ########################################
 function configure_cron() {
-    if grep -q 'backup.sh' "${CRON_CONFIG_FILE}" 2>/dev/null; then
+    if grep -q 'backup-runner.sh' "${CRON_CONFIG_FILE}" 2>/dev/null; then
         return
     fi
 
     local cron_expr pair_indices
     for cron_expr in "${!SCHEDULE_GROUPS[@]}"; do
         pair_indices="${SCHEDULE_GROUPS[${cron_expr}]}"
-        echo "${cron_expr} env PAIR_INDICES=${pair_indices} bash /app/backup.sh" >> "${CRON_CONFIG_FILE}"
+        echo "${cron_expr} env PAIR_INDICES=${pair_indices} /app/backup-runner.sh" >> "${CRON_CONFIG_FILE}"
         color blue "Cron job registered: ${cron_expr} (pairs: ${pair_indices})"
     done
 }
@@ -138,7 +138,7 @@ configure_cron
 # One-shot manual backup: run once and exit.
 if [[ "$1" == "backup" ]]; then
     color yellow "Running a one-shot backup (container will exit after completion)"
-    bash /app/backup.sh
+    /app/backup-runner.sh
     exit $?
 fi
 
@@ -155,7 +155,7 @@ for cron_expr in "${!SCHEDULE_GROUPS[@]}"; do
         pair_indices="${SCHEDULE_GROUPS[${cron_expr}]}"
         color blue "Interval-style cron detected — running initial backup immediately (pairs: ${pair_indices})"
         initial_backup_rc=0
-        PAIR_INDICES="${pair_indices}" bash /app/backup.sh || initial_backup_rc=$?
+        PAIR_INDICES="${pair_indices}" /app/backup-runner.sh || initial_backup_rc=$?
         if [[ ${initial_backup_rc} -ne 0 ]]; then
             color red "Initial backup failed with exit code ${initial_backup_rc}; continuing to start scheduler"
         fi

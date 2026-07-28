@@ -137,7 +137,7 @@ index 0000000..30f107c
 +		progressFile: envOr("GOTOHP_PROGRESS_FILE", defaultProgressFile),
 +		crontabsFile: filepath.Join(home, "crontabs"),
 +		configFile:   "/.env",
-+		backupScript: envOr("BACKUP_SCRIPT", "/app/backup.sh"),
++		backupScript: envOr("BACKUP_SCRIPT", "/app/backup-runner.sh"),
 +	}
 +}
 +

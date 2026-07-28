@@ -73,6 +73,11 @@ docker compose run --rm photos-backup backup
 | `CRON`          | `5 * * * *`    | Global cron expression (applies to all pairs without a `CRON_N` override) |
 | `TIMEZONE`      | `UTC`          | Container timezone (e.g. `America/New_York`) |
 | `CRON_OVERLAP`  | `queue`        | What to do when a schedule group fires while its previous run is still active (see [Schedule overlap modes](#schedule-overlap-modes)) |
+| `BACKUP_MAX_RUNTIME` | `0` | Maximum duration for a backup (`Ns`, `Nm`, `Nh`, or `Nd`); `0` disables the limit |
+| `BACKUP_KILL_AFTER` | `60s` | After a runtime timeout sends `TERM`, wait this positive duration before escalating to `KILL` |
+| `BACKUP_HEALTH_GRACE` | `300` | Extra seconds beyond `BACKUP_MAX_RUNTIME` before a RUNNING record makes the container unhealthy |
+| `BACKUP_ACTIVE_STATUS_DIR` | `/tmp/backup-active.d` | Per-run active-state directory used by the healthcheck |
+| `BACKUP_STATUS_FILE` | `/tmp/backup-status.env` | Last-writer-wins aggregate status retained for web UI/backward compatibility; not used for health |
 
 ### Web UI (experimental)
 
@@ -80,6 +85,7 @@ docker compose run --rm photos-backup backup
 |-----------------------|---------|-------------|
 | `WEBUI_BIND`          | `127.0.0.1` when only `WEBUI_PORT` is set; `0.0.0.0` when auth env vars are also set | Interface/address for the web UI HTTP server |
 | `WEBUI_PORT`          | `5572`  | Port exposed by the web UI HTTP server |
+| `BACKUP_SCRIPT`       | `/app/backup-runner.sh` | Manual-trigger executable; overriding it remains supported, but the override is responsible for equivalent runtime bounds |
 
 The web UI is automatically enabled if either `WEBUI_BIND` or `WEBUI_PORT` is specified. When only `WEBUI_PORT` is set and no auth variables (`WEBUI_AUTH`, `WEBUI_USERNAME`, `WEBUI_PASSWORD`, `WEBUI_TOKEN`) are configured, the UI binds to loopback (`127.0.0.1`) to avoid accidental remote exposure. Set `WEBUI_BIND=0.0.0.0` explicitly to expose it on all interfaces. When enabled, the UI serves:
 
@@ -121,6 +127,35 @@ This produces two cron groups:
 Different schedule groups always run **concurrently** — they never block each
 other.  The `CRON_OVERLAP` variable controls what happens only when the
 **same** group fires before its previous invocation has finished.
+
+#### Runtime bounds and health
+
+All supported launch paths—cron, the interval-style startup run, the `backup`
+entrypoint command, and the web UI default—invoke `/app/backup-runner.sh`.
+Runtime limits are genuinely opt-in: `BACKUP_MAX_RUNTIME=0` preserves unbounded
+historical behavior. To enable a bound, use a positive integer and unit, for
+example `BACKUP_MAX_RUNTIME=18h`. On expiry GNU `timeout` signals the entire
+backup process group with `TERM`; descendants still alive after
+`BACKUP_KILL_AFTER` are forcibly killed. The scheduler receives coreutils'
+timeout status (`124` after a TERM timeout, or `137` when KILL escalation is
+required), and no automatic retry or restart is performed.
+
+Each invocation atomically creates its own RUNNING record under
+`BACKUP_ACTIVE_STATUS_DIR` before the backup redirects or writes Docker logs.
+Concurrent schedule groups therefore cannot overwrite or hide each other. The
+Docker healthcheck scans all active records. No records is healthy; terminal
+records are ignored; malformed records are unhealthy. With
+`BACKUP_MAX_RUNTIME=0`, age checking is disabled. Otherwise, a RUNNING record
+older than the configured maximum plus `BACKUP_HEALTH_GRACE` is unhealthy.
+The check reads only numeric epochs and local files; it does not access logs,
+the network, credentials, or human-formatted dates.
+
+A graceful exit writes terminal per-run and aggregate state atomically, then
+removes its active record. An escalated `KILL` cannot run shell traps, so its
+RUNNING record intentionally remains as stale failure evidence and keeps the
+container unhealthy after the grace period. There is no automatic cleanup;
+after investigating, recover by recreating the container (or explicitly
+removing the known stale record).
 
 #### Schedule overlap modes
 
@@ -243,6 +278,28 @@ Set `GOTOHP_PROGRESS_LOG_INTERVAL=0` to disable these periodic wrapper log lines
 Raw gotohp TUI output is suppressed by default because it emits terminal control
 codes and blank lines in Docker logs. Set `GOTOHP_UPLOAD_RAW_LOGS=TRUE` to pass
 that raw output through for debugging.
+
+### Docker logging on Synology
+
+The supplied Compose file explicitly uses Docker's `local` logging driver for
+both single- and multi-source services, rotated at `10m` with `3` files. This
+avoids Synology's `db` logger while keeping `docker logs` available. Synology's
+GUI log pane may display or behave differently with the local driver.
+
+Pulling a new image or editing only this repository's sample Compose file does
+**not** migrate an existing container. Update the Compose definition actually
+used by the NAS and recreate the service, for example:
+
+```bash
+docker compose pull
+docker compose up -d --force-recreate
+docker inspect --format '{{.HostConfig.LogConfig.Type}}' <container-name>
+```
+
+The final command must print `local`. You can also inspect the configured
+rotation options with `docker inspect <container-name>` under
+`.HostConfig.LogConfig.Config`. Do not attempt to change the logging driver of
+an existing container in place; recreation is required.
 
 ### Per-pair credential overrides
 
